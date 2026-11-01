@@ -1,0 +1,4 @@
+.env*
+*.local
+ig_token
+node_modules/

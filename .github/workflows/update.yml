@@ -18,16 +18,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      # v7.0.1, pinned by commit. `ref: main` so a run that waited in the queue starts from the latest commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
 
       - name: Read the follower count
         run: node update.mjs
         env:
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
 
+      # Only after a daily refresh that handed back a new token string: store it as IG_TOKEN.
+      - name: Store the renewed token
+        id: token
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_PAT }}
+        run: |
+          f="$RUNNER_TEMP/ig_token"
+          [ -s "$f" ] || exit 0
+          if [ -z "$GH_TOKEN" ]; then
+            rm -f "$f"
+            echo "::error::Instagram returned a new token, but there is no SECRETS_PAT secret to save it with. See README.md → Setup, step 4."
+            exit 1
+          fi
+          gh secret set IG_TOKEN --repo "$GITHUB_REPOSITORY" < "$f"
+          rm -f "$f"
+          echo "Stored the renewed token as IG_TOKEN."
+
+      # Runs even when update.mjs flags a token problem, so the numbers still land; skipped if the new token
+      # could not be stored, so stats.json never shows an expiry for a token the job does not have.
       - name: Commit the new numbers
+        if: ${{ !cancelled() && steps.token.outcome != 'failure' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
           git add stats.json history.json
-          git diff --cached --quiet || { git commit -m "Update Instagram stats" && git push; }
+          git diff --cached --quiet || { git commit -q -m "Update Instagram stats" && git pull -q --rebase origin main && git push -q; }
